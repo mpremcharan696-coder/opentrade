@@ -874,13 +874,13 @@ pub async fn prepare_swap_candidate_handler(
 
                     let calculated_min = protocol_pump::curve::apply_slippage_min(est, slippage_bps);
 
-                    if calculated_min < req.expected_minimum_output_atomic {
+                    if est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    calculated_min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
@@ -917,13 +917,13 @@ pub async fn prepare_swap_candidate_handler(
                     let net_est = est_gross.saturating_sub(est_fee);
                     let calculated_net_min = calculated_min_gross.saturating_sub(fresh_fee);
 
-                    if calculated_net_min < req.expected_minimum_output_atomic {
+                    if net_est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain net minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    calculated_net_min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain net estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    net_est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
@@ -1014,13 +1014,13 @@ pub async fn prepare_swap_candidate_handler(
 
                     let calculated_min = protocol_pump::curve::apply_slippage_min(est, slippage_bps);
 
-                    if calculated_min < req.expected_minimum_output_atomic {
+                    if est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    calculated_min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
@@ -1062,13 +1062,13 @@ pub async fn prepare_swap_candidate_handler(
                     let net_est = est_gross.saturating_sub(est_fee);
                     let calculated_net_min = calculated_min_gross.saturating_sub(fresh_fee);
 
-                    if calculated_net_min < req.expected_minimum_output_atomic {
+                    if net_est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain net minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    calculated_net_min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain net estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    net_est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
@@ -1176,13 +1176,13 @@ pub async fn prepare_swap_candidate_handler(
                     };
                     let min = on_chain_min;
 
-                    if min < req.expected_minimum_output_atomic {
+                    if est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
@@ -1222,18 +1222,19 @@ pub async fn prepare_swap_candidate_handler(
                         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
 
                     let net_min = min_gross.saturating_sub(fee);
-                    if net_min < req.expected_minimum_output_atomic {
+                    let net_est = est_gross.saturating_sub(compute_fee(est_gross, fee_tier.rate_bps()).unwrap_or(0));
+
+                    if net_est < req.expected_minimum_output_atomic {
                         return Err((
                             StatusCode::BAD_REQUEST,
                             Json(json!({
                                 "error": format!(
-                                    "Adverse price movement: fresh on-chain net minimum output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
-                                    net_min, req.expected_minimum_output_atomic
+                                    "Adverse price movement: fresh on-chain net estimated output ({} atomic) is lower than selected route quote minimum ({} atomic). Market conditions changed; please refresh route quote.",
+                                    net_est, req.expected_minimum_output_atomic
                                 )
                             })),
                         ));
                     }
-                    let net_est = est_gross.saturating_sub(compute_fee(est_gross, fee_tier.rate_bps()).unwrap_or(0));
 
                     (net_est, net_min, fee, b_data)
                 };
