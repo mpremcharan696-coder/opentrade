@@ -1,0 +1,18 @@
+[package]
+name = "protocol-pumpswap"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+shared-types = { workspace = true }
+protocol-pump = { workspace = true }
+solana-sdk = { workspace = true }
+spl-token = { workspace = true }
+spl-associated-token-account = { workspace = true }
+borsh = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bs58 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
