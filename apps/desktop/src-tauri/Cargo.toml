@@ -3,6 +3,7 @@ name = "desktop"
 version = "0.1.0"
 description = "Axiom Solana Memecoin Trading Terminal"
 edition = "2021"
+default-run = "desktop"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
