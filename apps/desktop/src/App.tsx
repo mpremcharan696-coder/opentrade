@@ -42,6 +42,80 @@ async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Prom
       return 0.0 as T;
     }
   }
+  if (cmd === 'get_token_balance') {
+    const pubkey = args?.pubkey as string;
+    const mint = args?.mint as string;
+    const rpcUrl = (args?.rpc_url as string) || (args?.rpcUrl as string) || PUBLIC_SOLANA_RPC;
+    try {
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTokenAccountsByOwner',
+          params: [pubkey, { mint }, { encoding: 'jsonParsed' }],
+        }),
+      });
+      const data = await res.json();
+      const accounts = data?.result?.value || [];
+      let totalAtomic = 0;
+      let decimals = 0;
+      let totalUi = 0;
+      for (const acc of accounts) {
+        const info = acc?.account?.data?.parsed?.info?.tokenAmount;
+        totalAtomic += parseInt(info?.amount || '0');
+        decimals = info?.decimals || 0;
+        totalUi += (info?.uiAmount ?? 0);
+      }
+      return {
+        mint,
+        amount_atomic: totalAtomic,
+        decimals,
+        ui_amount: totalUi,
+        ui_amount_string: totalUi.toString(),
+      } as T;
+    } catch {
+      return { mint, amount_atomic: 0, decimals: 0, ui_amount: 0, ui_amount_string: '0' } as T;
+    }
+  }
+  if (cmd === 'get_wallet_token_accounts') {
+    const pubkey = args?.pubkey as string;
+    const rpcUrl = (args?.rpc_url as string) || (args?.rpcUrl as string) || PUBLIC_SOLANA_RPC;
+    try {
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTokenAccountsByOwner',
+          params: [pubkey, { programId: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA' }, { encoding: 'jsonParsed' }],
+        }),
+      });
+      const data = await res.json();
+      const accounts = data?.result?.value || [];
+      const list = [];
+      for (const acc of accounts) {
+        const info = acc?.account?.data?.parsed?.info;
+        const mint = info?.mint;
+        const tAmt = info?.tokenAmount;
+        const atomic = parseInt(tAmt?.amount || '0');
+        if (atomic > 0 && mint) {
+          list.push({
+            mint,
+            amount_atomic: atomic,
+            decimals: tAmt?.decimals || 0,
+            ui_amount: tAmt?.uiAmount || 0,
+            ui_amount_string: (tAmt?.uiAmount || 0).toString(),
+          });
+        }
+      }
+      return list as T;
+    } catch {
+      return [] as T;
+    }
+  }
   if (cmd === 'check_server_health') {
     try {
       const res = await fetch('http://localhost:8080/health');
@@ -117,9 +191,19 @@ interface TokenHolding {
   name: string;
   imageUrl?: string;
   amount: number;
+  decimals?: number;
+  rawAmountAtomic?: string;
   avgBuyPriceSol: number;
   avgBuyPriceUsd: number;
   totalCostSol: number;
+}
+
+interface TokenBalanceSummary {
+  mint: string;
+  amount_atomic: number;
+  decimals: number;
+  ui_amount: number;
+  ui_amount_string: string;
 }
 
 interface CompletedOrder {
@@ -352,6 +436,7 @@ interface TokenItem {
   symbol: string;
   name: string;
   mint: string;
+  decimals?: number;
   priceSol: number;
   priceUsd: number;
   mcapUsd: number;
@@ -460,6 +545,7 @@ const DEFAULT_TOKENS: TokenItem[] = [
     symbol: 'BONK',
     name: 'Bonk',
     mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+    decimals: 5,
     priceSol: 0.00000003,
     priceUsd: 0.00000301,
     mcapUsd: 1_950_000_000,
@@ -815,7 +901,13 @@ export default function App() {
       } else {
         setOrderHistory([]);
       }
-      setHoldings([]);
+      // Load cached on-chain live holdings for the active wallet
+      const savedLiveHoldings = localStorage.getItem(`axiom_live_holdings_${activeWallet.pubkey}`);
+      if (savedLiveHoldings) {
+        try { setHoldings(JSON.parse(savedLiveHoldings)); } catch { setHoldings([]); }
+      } else {
+        setHoldings([]);
+      }
     }
   }, [activeWallet, tradingMode]);
 
@@ -924,6 +1016,125 @@ export default function App() {
     }
   }, [activeWallet, tradingMode, clientRpcEndpoint]);
 
+  const syncLiveTokenHoldings = async (pubkey: string) => {
+    if (isDemoMode || !pubkey) return;
+    try {
+      const rpcEndpoint = clientRpcEndpoint;
+      const tokenAccounts = await tauriInvoke<TokenBalanceSummary[]>('get_wallet_token_accounts', {
+        pubkey,
+        rpc_url: rpcEndpoint,
+        rpcUrl: rpcEndpoint,
+      });
+
+      if (!tokenAccounts) return;
+
+      setHoldings((prev) => {
+        const updatedHoldings: TokenHolding[] = [];
+
+        for (const acc of tokenAccounts) {
+          if (acc.ui_amount <= 0) continue;
+
+          const existing = prev.find((h) => h.mint === acc.mint);
+          const meta = tokens.find((t) => t.mint === acc.mint) || DEFAULT_TOKENS.find((t) => t.mint === acc.mint);
+
+          let avgSol = existing?.avgBuyPriceSol || meta?.priceSol || 0;
+          let avgUsd = existing?.avgBuyPriceUsd || meta?.priceUsd || 0;
+          let totalCost = existing?.totalCostSol || 0;
+
+          const pastOrders = orderHistory.filter((o) => o.mint === acc.mint && o.type === 'buy');
+          if (pastOrders.length > 0 && (!existing || existing.totalCostSol === 0)) {
+            const totalSolSpent = pastOrders.reduce((sum, o) => sum + o.amountSol, 0);
+            const totalTokensBought = pastOrders.reduce((sum, o) => sum + o.amountTokens, 0);
+            if (totalTokensBought > 0) {
+              avgSol = totalSolSpent / totalTokensBought;
+              avgUsd = avgSol * solPriceUsd;
+              totalCost = totalSolSpent;
+            }
+          }
+
+          updatedHoldings.push({
+            mint: acc.mint,
+            symbol: meta?.symbol || (acc.mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 'BONK' : acc.mint.slice(0, 4) + '...'),
+            name: meta?.name || meta?.symbol || 'SPL Token',
+            imageUrl: meta?.imageUrl || `https://dd.dexscreener.com/ds-data/tokens/solana/${acc.mint}.png`,
+            amount: acc.ui_amount,
+            decimals: acc.decimals,
+            rawAmountAtomic: acc.amount_atomic.toString(),
+            avgBuyPriceSol: avgSol,
+            avgBuyPriceUsd: avgUsd,
+            totalCostSol: totalCost,
+          });
+        }
+
+        try {
+          localStorage.setItem(`axiom_live_holdings_${pubkey}`, JSON.stringify(updatedHoldings));
+        } catch { }
+        return updatedHoldings;
+      });
+    } catch (e) {
+      console.warn('Failed to sync live token holdings:', e);
+    }
+  };
+
+  const syncSelectedTokenBalance = async (pubkey: string, mint: string) => {
+    if (isDemoMode || !pubkey || !mint) return;
+    try {
+      const rpcEndpoint = clientRpcEndpoint;
+      const bal = await tauriInvoke<TokenBalanceSummary>('get_token_balance', {
+        pubkey,
+        mint,
+        rpc_url: rpcEndpoint,
+        rpcUrl: rpcEndpoint,
+      });
+
+      if (!bal) return;
+
+      setHoldings((prev) => {
+        const existingIdx = prev.findIndex((h) => h.mint === mint);
+        if (bal.ui_amount <= 0) {
+          if (existingIdx >= 0) {
+            const next = prev.filter((h) => h.mint !== mint);
+            try { localStorage.setItem(`axiom_live_holdings_${pubkey}`, JSON.stringify(next)); } catch { }
+            return next;
+          }
+          return prev;
+        }
+
+        const meta = tokens.find((t) => t.mint === mint) || DEFAULT_TOKENS.find((t) => t.mint === mint);
+        const existing = existingIdx >= 0 ? prev[existingIdx] : null;
+
+        const updatedItem: TokenHolding = {
+          mint,
+          symbol: existing?.symbol || meta?.symbol || (mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 'BONK' : selectedToken.symbol),
+          name: existing?.name || meta?.name || (mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 'Bonk' : selectedToken.name),
+          imageUrl: existing?.imageUrl || meta?.imageUrl || selectedToken.imageUrl,
+          amount: bal.ui_amount,
+          decimals: bal.decimals,
+          rawAmountAtomic: bal.amount_atomic.toString(),
+          avgBuyPriceSol: existing?.avgBuyPriceSol || meta?.priceSol || selectedToken.priceSol,
+          avgBuyPriceUsd: existing?.avgBuyPriceUsd || meta?.priceUsd || selectedToken.priceUsd,
+          totalCostSol: existing?.totalCostSol || 0,
+        };
+
+        const next = existingIdx >= 0
+          ? prev.map((h, i) => (i === existingIdx ? updatedItem : h))
+          : [...prev, updatedItem];
+
+        try { localStorage.setItem(`axiom_live_holdings_${pubkey}`, JSON.stringify(next)); } catch { }
+        return next;
+      });
+    } catch (e) {
+      console.warn('Failed to sync selected token balance:', e);
+    }
+  };
+
+  // Sync token balance when selected coin, active tab, or wallet changes
+  useEffect(() => {
+    if (activeWallet && !isDemoMode && selectedToken?.mint) {
+      syncSelectedTokenBalance(activeWallet.pubkey, selectedToken.mint);
+    }
+  }, [selectedToken?.mint, activeTab, activeWallet?.pubkey, isDemoMode]);
+
   const updateWalletBalance = async (pubkey: string) => {
     setIsRefreshingBalance(true);
     if (isDemoMode) {
@@ -949,6 +1160,12 @@ export default function App() {
       setWalletBalance(0.0);
     } finally {
       setIsRefreshingBalance(false);
+    }
+
+    // Also sync all live token holdings and current selected token balance
+    await syncLiveTokenHoldings(pubkey);
+    if (selectedToken?.mint) {
+      await syncSelectedTokenBalance(pubkey, selectedToken.mint);
     }
   };
 
@@ -1133,9 +1350,14 @@ export default function App() {
       setIsComparingRoutes(true);
       setComparisonError(null);
       try {
+        const heldItem = holdings.find((h) => h.mint === selectedToken.mint);
+        const tokenDecimals = heldItem?.decimals ?? (selectedToken.mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 5 : 6);
+
         const amountAtomic = activeTab === 'buy'
           ? Math.floor(numAmount * 1e9)
-          : Math.floor(numAmount * 1e6);
+          : (heldItem && numAmount === heldItem.amount && heldItem.rawAmountAtomic
+            ? parseInt(heldItem.rawAmountAtomic)
+            : Math.floor(numAmount * Math.pow(10, tokenDecimals)));
 
         if (amountAtomic <= 0) {
           setIsComparingRoutes(false);
@@ -1574,9 +1796,14 @@ export default function App() {
     setCandidateError(null);
 
     try {
+      const heldItem = holdings.find((h) => h.mint === selectedToken.mint);
+      const tokenDecimals = heldItem?.decimals ?? (selectedToken.mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 5 : 6);
+
       const amountAtomic = activeTab === 'buy'
         ? Math.floor(numAmount * 1_000_000_000)
-        : Math.floor(numAmount * 1_000_000);
+        : (heldItem && numAmount === heldItem.amount && heldItem.rawAmountAtomic
+          ? parseInt(heldItem.rawAmountAtomic)
+          : Math.floor(numAmount * Math.pow(10, tokenDecimals)));
 
       const pFee = priorityFee === 'turbo' ? 150_000 : priorityFee === 'normal' ? 20_000 : 50_000;
       const inputMint = activeTab === 'buy' ? 'So11111111111111111111111111111111111111112' : selectedToken.mint;
@@ -1684,6 +1911,10 @@ export default function App() {
         const elapsedMs = Math.round(performance.now() - liveStartTime);
         // Only update on-chain balance and add to completed orders on confirmed success!
         await updateWalletBalance(activeWallet.pubkey);
+        if (selectedToken?.mint) {
+          await syncSelectedTokenBalance(activeWallet.pubkey, selectedToken.mint);
+        }
+        const outDecimals = selectedToken.mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 5 : (selectedToken.decimals ?? 6);
         const newOrder: CompletedOrder = {
           id: result.signature || `live_${Date.now()}`,
           time: new Date().toLocaleTimeString(),
@@ -1691,7 +1922,7 @@ export default function App() {
           symbol: selectedToken.symbol,
           mint: selectedToken.mint,
           amountSol: activeTab === 'buy' ? parseFloat(amount) : (swapValidationResult.candidate.minimum_output_atomic / 1e9),
-          amountTokens: activeTab === 'buy' ? (swapValidationResult.candidate.minimum_output_atomic / 1e6) : parseFloat(amount),
+          amountTokens: activeTab === 'buy' ? (swapValidationResult.candidate.minimum_output_atomic / Math.pow(10, outDecimals)) : parseFloat(amount),
           priceSol: selectedToken.priceSol,
           priceUsd: selectedToken.priceUsd,
           signature: result.signature || '',
@@ -1749,6 +1980,9 @@ export default function App() {
       setLiveSubmissionResult(result);
       if (result.status === 'confirmed' && activeWallet) {
         await updateWalletBalance(activeWallet.pubkey);
+        if (selectedToken?.mint) {
+          await syncSelectedTokenBalance(activeWallet.pubkey, selectedToken.mint);
+        }
       }
     } catch (e: any) {
       alert('Status query error: ' + (e?.message || e.toString()));
@@ -1797,9 +2031,13 @@ export default function App() {
 
     try {
       const pFee = priorityFee === 'turbo' ? 150_000 : priorityFee === 'normal' ? 20_000 : 50_000;
+      const heldItem = holdings.find((h) => h.mint === selectedToken.mint);
+      const tokenDecimals = heldItem?.decimals ?? (selectedToken.mint === 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263' ? 5 : 6);
       const amountAtomic = activeTab === 'buy'
         ? Math.floor(numAmount * 1_000_000_000)
-        : Math.floor(numAmount * 1_000_000);
+        : (heldItem && numAmount === heldItem.amount && heldItem.rawAmountAtomic
+          ? parseInt(heldItem.rawAmountAtomic)
+          : Math.floor(numAmount * Math.pow(10, tokenDecimals)));
 
       // Determine platform: route non-pump tokens and Raydium/Meteora/Orca pairs through OKX DEX Router V1
       const tokenDex = (selectedToken as any)?.dexId?.toLowerCase() || '';
@@ -1954,7 +2192,7 @@ export default function App() {
     };
     handleSelectToken(tok);
     setActiveTab('sell');
-    const heldAmt = Math.floor(holding.amount);
+    const heldAmt = holding.amount >= 1 ? Math.floor(holding.amount) : holding.amount;
     setAmount(heldAmt > 0 ? heldAmt.toString() : '0');
     setTradeViewMode('detail');
     setCurrentNav('trade');
@@ -1962,7 +2200,7 @@ export default function App() {
 
   const handleSendHolding = (holding: TokenHolding) => {
     setSendAsset(holding.mint);
-    const heldAmt = Math.floor(holding.amount);
+    const heldAmt = holding.amount >= 1 ? Math.floor(holding.amount) : holding.amount;
     setSendAmount(heldAmt > 0 ? heldAmt.toString() : '0');
     setShowSendModal(true);
   };
@@ -2519,7 +2757,12 @@ export default function App() {
             className={`tab-btn ${!isBuying ? 'active sell' : ''}`}
             onClick={() => {
               setActiveTab('sell');
-              if (heldCoinAmt > 0) setAmount(Math.floor(heldCoinAmt).toString());
+              if (activeWallet && !isDemoMode && selectedToken?.mint) {
+                syncSelectedTokenBalance(activeWallet.pubkey, selectedToken.mint);
+              }
+              if (heldCoinAmt > 0) {
+                setAmount(heldCoinAmt >= 1 ? Math.floor(heldCoinAmt).toString() : heldCoinAmt.toString());
+              }
             }}
           >
             SELL {selectedToken.symbol}
@@ -2531,7 +2774,7 @@ export default function App() {
           <div className="swap-card-header">
             <span>{isBuying ? 'YOU SPEND' : `SELL ${selectedToken.symbol}`}</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>Balance: {isBuying ? `${walletBalance.toFixed(4)} SOL` : `${heldCoinAmt.toLocaleString()} ${selectedToken.symbol}`}</span>
+              <span>Balance: {isBuying ? `${walletBalance.toFixed(4)} SOL` : `${heldCoinAmt > 0 ? (heldCoinAmt >= 1 ? heldCoinAmt.toLocaleString(undefined, { maximumFractionDigits: 4 }) : heldCoinAmt.toString()) : '0'} ${selectedToken.symbol}`}</span>
               {isBuying && (
                 <button
                   onClick={handleAirdropTestSol}
@@ -2606,7 +2849,12 @@ export default function App() {
                     style={{ flex: 1, padding: '4px', fontSize: '11px' }}
                     onClick={() => {
                       const fraction = parseInt(pct) / 100;
-                      setAmount(Math.floor(heldCoinAmt * fraction).toString());
+                      if (fraction === 1) {
+                        setAmount(heldCoinAmt.toString());
+                      } else {
+                        const val = heldCoinAmt * fraction;
+                        setAmount(val >= 1 ? Math.floor(val).toString() : Number(val.toPrecision(4)).toString());
+                      }
                     }}
                   >
                     {pct}

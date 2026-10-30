@@ -201,6 +201,15 @@ pub struct LiveTokenData {
     pub image_url: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TokenBalanceSummary {
+    pub mint: String,
+    pub amount_atomic: u64,
+    pub decimals: u8,
+    pub ui_amount: f64,
+    pub ui_amount_string: String,
+}
+
 /// Query real on-chain SOL balance for a given wallet address.
 #[tauri::command]
 async fn get_wallet_balance(pubkey: String, rpc_url: Option<String>) -> Result<f64, String> {
@@ -227,6 +236,208 @@ async fn get_wallet_balance(pubkey: String, rpc_url: Option<String>) -> Result<f
     }
     let lamports = json["result"]["value"].as_u64().unwrap_or(0);
     Ok(lamports as f64 / 1_000_000_000.0)
+}
+
+/// Query real on-chain SPL token balance for a given wallet address and token mint.
+#[tauri::command]
+async fn get_token_balance(
+    pubkey: String,
+    mint: String,
+    rpc_url: Option<String>,
+) -> Result<TokenBalanceSummary, String> {
+    let rpc = rpc_url.unwrap_or_else(|| PUBLIC_SOLANA_RPC.to_string());
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTokenAccountsByOwner",
+        "params": [
+            pubkey,
+            { "mint": mint },
+            { "encoding": "jsonParsed" }
+        ]
+    });
+
+    let res = client
+        .post(&rpc)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?;
+
+    let json: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+    if let Some(err) = json.get("error") {
+        return Err(format!("RPC error: {}", err));
+    }
+
+    let mut total_atomic: u64 = 0;
+    let mut decimals: u8 = 0;
+    let mut total_ui_amount: f64 = 0.0;
+
+    if let Some(accounts) = json["result"]["value"].as_array() {
+        for acc in accounts {
+            let info = &acc["account"]["data"]["parsed"]["info"]["tokenAmount"];
+            if let Some(amt_str) = info["amount"].as_str() {
+                if let Ok(atomic) = amt_str.parse::<u64>() {
+                    total_atomic = total_atomic.saturating_add(atomic);
+                }
+            }
+            if let Some(dec) = info["decimals"].as_u64() {
+                decimals = dec as u8;
+            }
+            if let Some(ui_amt) = info["uiAmount"].as_f64() {
+                total_ui_amount += ui_amt;
+            } else if let Some(ui_str) = info["uiAmountString"].as_str() {
+                if let Ok(ui_val) = ui_str.parse::<f64>() {
+                    total_ui_amount += ui_val;
+                }
+            }
+        }
+    }
+
+    let ui_amount_string = if total_atomic == 0 {
+        "0".to_string()
+    } else {
+        format!("{:.prec$}", total_ui_amount, prec = decimals as usize)
+            .trim_end_matches('0')
+            .trim_end_matches('.')
+            .to_string()
+    };
+
+    Ok(TokenBalanceSummary {
+        mint,
+        amount_atomic: total_atomic,
+        decimals,
+        ui_amount: total_ui_amount,
+        ui_amount_string,
+    })
+}
+
+/// Query all SPL token accounts owned by a wallet with non-zero balances.
+#[tauri::command]
+async fn get_wallet_token_accounts(
+    pubkey: String,
+    rpc_url: Option<String>,
+) -> Result<Vec<TokenBalanceSummary>, String> {
+    let rpc = rpc_url.unwrap_or_else(|| PUBLIC_SOLANA_RPC.to_string());
+    let client = reqwest::Client::new();
+
+    // Query standard SPL Token program accounts
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTokenAccountsByOwner",
+        "params": [
+            pubkey,
+            { "programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+            { "encoding": "jsonParsed" }
+        ]
+    });
+
+    let res = client
+        .post(&rpc)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("RPC request failed: {}", e))?;
+
+    let json: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse RPC response: {}", e))?;
+
+    if let Some(err) = json.get("error") {
+        return Err(format!("RPC error: {}", err));
+    }
+
+    let mut token_map: std::collections::HashMap<String, (u64, u8, f64)> = std::collections::HashMap::new();
+
+    if let Some(accounts) = json["result"]["value"].as_array() {
+        for acc in accounts {
+            let info = &acc["account"]["data"]["parsed"]["info"];
+            let mint = info["mint"].as_str().unwrap_or("").to_string();
+            if mint.is_empty() {
+                continue;
+            }
+            let token_amount = &info["tokenAmount"];
+            let atomic = token_amount["amount"]
+                .as_str()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            let dec = token_amount["decimals"].as_u64().unwrap_or(0) as u8;
+            let ui_amt = token_amount["uiAmount"].as_f64().unwrap_or(0.0);
+
+            if atomic > 0 {
+                let entry = token_map.entry(mint).or_insert((0, dec, 0.0));
+                entry.0 = entry.0.saturating_add(atomic);
+                entry.1 = dec;
+                entry.2 += ui_amt;
+            }
+        }
+    }
+
+    // Also query Token-2022 program accounts
+    let body_2022 = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "getTokenAccountsByOwner",
+        "params": [
+            pubkey,
+            { "programId": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" },
+            { "encoding": "jsonParsed" }
+        ]
+    });
+
+    if let Ok(res_2022) = client.post(&rpc).json(&body_2022).send().await {
+        if let Ok(json_2022) = res_2022.json::<serde_json::Value>().await {
+            if let Some(accounts_2022) = json_2022["result"]["value"].as_array() {
+                for acc in accounts_2022 {
+                    let info = &acc["account"]["data"]["parsed"]["info"];
+                    let mint = info["mint"].as_str().unwrap_or("").to_string();
+                    if mint.is_empty() {
+                        continue;
+                    }
+                    let token_amount = &info["tokenAmount"];
+                    let atomic = token_amount["amount"]
+                        .as_str()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    let dec = token_amount["decimals"].as_u64().unwrap_or(0) as u8;
+                    let ui_amt = token_amount["uiAmount"].as_f64().unwrap_or(0.0);
+
+                    if atomic > 0 {
+                        let entry = token_map.entry(mint).or_insert((0, dec, 0.0));
+                        entry.0 = entry.0.saturating_add(atomic);
+                        entry.1 = dec;
+                        entry.2 += ui_amt;
+                    }
+                }
+            }
+        }
+    }
+
+    let summaries = token_map
+        .into_iter()
+        .map(|(mint, (atomic, decimals, ui_amount))| {
+            let ui_amount_string = format!("{:.prec$}", ui_amount, prec = decimals as usize)
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string();
+            TokenBalanceSummary {
+                mint,
+                amount_atomic: atomic,
+                decimals,
+                ui_amount,
+                ui_amount_string,
+            }
+        })
+        .collect();
+
+    Ok(summaries)
 }
 
 /// Fetch real-time SOL / USD market price.
@@ -588,6 +799,8 @@ pub fn run() {
             validate_intent_command,
             unlock_and_sign_intent,
             get_wallet_balance,
+            get_token_balance,
+            get_wallet_token_accounts,
             fetch_live_sol_price,
             search_live_tokens,
             check_server_health,
