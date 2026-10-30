@@ -44,8 +44,8 @@ pub const WSOL_MINT_STR: &str = "So11111111111111111111111111111111111111112";
 pub const MAX_QUOTE_AGE_MS: u128 = 60_000; // 60 seconds max quote age
 pub const MAX_SLOT_LAG: u64 = 150; // ~60 seconds max slot lag
 
-/// Fetch latest blockhash and slot from Solana RPC.
-async fn fetch_blockhash_and_slot(rpc_url: &str) -> Result<(Hash, u64), String> {
+/// Fetch latest blockhash, slot, and authoritative lastValidBlockHeight from Solana RPC.
+async fn fetch_blockhash_and_slot(rpc_url: &str) -> Result<(Hash, u64, u64), String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_millis(5000))
         .build()
@@ -90,7 +90,11 @@ async fn fetch_blockhash_and_slot(rpc_url: &str) -> Result<(Hash, u64), String> 
         .as_u64()
         .ok_or_else(|| "Missing slot in RPC response".to_string())?;
 
-    Ok((hash, slot))
+    let last_valid_block_height = json["result"]["value"]["lastValidBlockHeight"]
+        .as_u64()
+        .unwrap_or(slot + 150);
+
+    Ok((hash, slot, last_valid_block_height))
 }
 
 /// Fetch real bonding curve state for Pump.fun, validating program owner and slot freshness.
@@ -776,7 +780,7 @@ pub async fn prepare_swap_candidate_handler(
     }
 
     // 3. Fetch fresh recent blockhash and slot from RPC (Fail-closed)
-    let (recent_blockhash, current_slot) = fetch_blockhash_and_slot(&state.inner.rpc_url)
+    let (recent_blockhash, current_slot, last_valid_block_height) = fetch_blockhash_and_slot(&state.inner.rpc_url)
         .await
         .map_err(|e| {
             (
@@ -1397,7 +1401,7 @@ pub async fn prepare_swap_candidate_handler(
         minimum_output_atomic,
         slippage_bps,
         recent_blockhash: recent_blockhash.to_string(),
-        last_valid_block_height: current_slot + 150,
+        last_valid_block_height,
         state_slot: current_slot,
         created_at,
         expires_at,

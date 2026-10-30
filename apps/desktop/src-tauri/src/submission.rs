@@ -147,7 +147,7 @@ impl SolanaRpc for HttpSolanaRpc {
                     "encoding": "base64",
                     "skipPreflight": skip_preflight,
                     "preflightCommitment": "confirmed",
-                    "maxRetries": 0
+                    "maxRetries": 5
                 }
             ]
         });
@@ -662,13 +662,14 @@ pub async fn sign_and_submit_swap_candidate<R: SolanaRpc>(
             if sig != signature_str {
                 tracing::warn!("RPC returned signature {} differing from signed {}", sig, signature_str);
             }
-            // 9. Bounded, cancellable confirmation tracking loop
-            confirm_transaction_status(
+            // 9. Bounded, cancellable confirmation tracking loop with active re-broadcasting
+            confirm_transaction_status_with_rebroadcast(
                 &signature_str,
                 candidate.last_valid_block_height,
                 rpc,
                 polling_timeout_secs,
                 polling_interval_millis,
+                Some(&signed_tx_base64),
             ).await
         }
         Err(RpcSubmissionError::PreflightSimulationFailed { error_message, logs }) => {
@@ -688,12 +689,13 @@ pub async fn sign_and_submit_swap_candidate<R: SolanaRpc>(
             // Ambiguous submission error (network timeout, connection drop, 5xx): transaction may still land!
             // DO NOT report as Failed. Transition to status confirmation check using locally derived signature
             // so a retry won't accidentally create a duplicate trade.
-            let status_check = confirm_transaction_status(
+            let status_check = confirm_transaction_status_with_rebroadcast(
                 &signature_str,
                 candidate.last_valid_block_height,
                 rpc,
                 polling_timeout_secs,
                 polling_interval_millis,
+                Some(&signed_tx_base64),
             ).await;
 
             match status_check.status {
@@ -729,10 +731,30 @@ pub async fn confirm_transaction_status<R: SolanaRpc>(
     polling_timeout_secs: u64,
     polling_interval_millis: u64,
 ) -> SwapSubmissionResult {
+    confirm_transaction_status_with_rebroadcast(
+        signature,
+        last_valid_block_height,
+        rpc,
+        polling_timeout_secs,
+        polling_interval_millis,
+        None,
+    ).await
+}
+
+/// Track status of a submitted transaction signature with periodic re-broadcasting and blockhash expiry checks.
+pub async fn confirm_transaction_status_with_rebroadcast<R: SolanaRpc>(
+    signature: &str,
+    last_valid_block_height: u64,
+    rpc: &R,
+    polling_timeout_secs: u64,
+    polling_interval_millis: u64,
+    raw_signed_tx_base64: Option<&str>,
+) -> SwapSubmissionResult {
     let explorer_url = format!("https://solscan.io/tx/{}", signature);
     let start_time = std::time::Instant::now();
     let timeout_duration = Duration::from_secs(polling_timeout_secs);
     let step_duration = Duration::from_millis(polling_interval_millis.max(500));
+    let mut poll_tick: u64 = 0;
 
     loop {
         // 1. Check signature status on cluster
@@ -769,12 +791,19 @@ pub async fn confirm_transaction_status<R: SolanaRpc>(
                 }
             }
             Ok(None) => {
-                // Not yet processed / seen by RPC node
+                // Not yet processed / seen by RPC node.
+                // Re-broadcast signed transaction every ~2.5s (every 2nd loop tick) with skipPreflight = true
+                if let Some(raw_tx) = raw_signed_tx_base64 {
+                    if poll_tick > 0 && poll_tick % 2 == 0 {
+                        let _ = rpc.send_transaction(raw_tx, true).await;
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!("Transient RPC error checking signature status: {}", e);
             }
         }
+        poll_tick = poll_tick.saturating_add(1);
 
         // 2. Check cluster block height to detect blockhash expiry
         if let Ok(current_height) = rpc.get_block_height().await {
