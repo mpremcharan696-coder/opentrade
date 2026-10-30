@@ -4357,8 +4357,8 @@ export default function App() {
         {/* Phase 3: Review Unsigned Swap Transaction Candidate Modal */}
         {showPhase3ReviewModal && swapValidationResult && (
           <div className="modal-backdrop">
-            <div className="modal-content" style={{ width: '560px', maxHeight: '90vh', overflowY: 'auto' }}>
-              <div className="modal-header">
+            <div className="modal-content" style={{ width: '580px', maxWidth: '95vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: '20px 24px 16px 24px', overflow: 'hidden' }}>
+              <div className="modal-header" style={{ flexShrink: 0, marginBottom: '12px' }}>
                 <span className="modal-title">
                   Review Unsigned Swap Candidate
                 </span>
@@ -4376,6 +4376,9 @@ export default function App() {
                     : '❌ VALIDATION FAILED'}
                 </span>
               </div>
+
+              {/* Scrollable Modal Body */}
+              <div style={{ flex: 1, overflowY: 'auto', paddingRight: '6px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
 
               {/* Target Token & Candidate Header */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px', background: 'var(--bg-primary)', padding: '10px 12px', borderRadius: 'var(--radius-md)' }}>
@@ -4693,88 +4696,92 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="modal-actions">
-                    <button
-                      className="modal-btn-confirm"
-                      onClick={() => {
-                        setShowPhase3ReviewModal(false);
-                        setLiveSubmissionResult(null);
-                      }}
-                      style={{ width: '100%', background: 'var(--bg-tertiary)', color: 'var(--text-main)', border: '1px solid var(--border-subtle)', fontWeight: 700 }}
-                    >
-                      CLOSE REVIEW
-                    </button>
                   </div>
-                </div>
-              ) : (
-                <div>
-                  {/* Authorization & Password Entry */}
-                  {swapValidationResult.is_valid && swapValidationResult.is_simulated ? (
-                    <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '12px 14px', marginBottom: '16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-main)' }}>
-                          🔑 Authorize & Sign Transaction
-                        </span>
-                        <span style={{ fontSize: '10px', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
-                          Cluster: Mainnet-Beta
-                        </span>
-                      </div>
-
-                      <div style={{ marginBottom: '10px' }}>
-                        <input
-                          type="password"
-                          value={phase4Password}
-                          onChange={(e) => setPhase4Password(e.target.value)}
-                          placeholder="Enter wallet keystore password"
-                          disabled={isSubmittingLiveSwap}
-                          style={{
-                            width: '100%',
-                            padding: '8px 10px',
-                            background: 'rgba(0, 0, 0, 0.3)',
-                            border: '1px solid var(--border-subtle)',
-                            borderRadius: '4px',
-                            color: '#fff',
-                            fontSize: '12px',
-                            fontFamily: 'var(--font-mono)',
-                          }}
-                        />
-                      </div>
-
-                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer', fontSize: '11px', color: 'var(--text-muted)', userSelect: 'none' }}>
-                        <input
-                          type="checkbox"
-                          checked={clusterSafetyConfirmed}
-                          onChange={(e) => setClusterSafetyConfirmed(e.target.checked)}
-                          disabled={isSubmittingLiveSwap}
-                          style={{ marginTop: '2px' }}
-                        />
-                        <span>
-                          <strong style={{ color: 'var(--accent-amber)' }}>Mainnet Safety Gate:</strong> I confirm intentional execution on Solana Mainnet. I have verified the route, amounts, and fees.
-                        </span>
-                      </label>
-
-                      {isSubmittingLiveSwap && (
-                        <div style={{ marginTop: '12px', background: 'rgba(14, 165, 233, 0.1)', border: '1px solid var(--accent-cyan)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
-                          <div style={{ color: 'var(--accent-cyan)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span className="spinner" style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid var(--accent-cyan)', borderTopColor: 'transparent', borderRadius: '50%' }}></span>
-                            <span>{liveSwapStage || 'Executing trade in Rust...'}</span>
-                          </div>
+                ) : (
+                  <div>
+                    {/* Authorization & Password Entry */}
+                    {swapValidationResult.is_valid && swapValidationResult.is_simulated ? (
+                      <div style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '12px 14px', marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-main)' }}>
+                            🔑 Authorize & Sign Transaction
+                          </span>
+                          <span style={{ fontSize: '10px', color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                            Cluster: Mainnet-Beta
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '10px 12px', marginBottom: '16px', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
-                      <div style={{ color: '#ff6b6b', fontWeight: 700, marginBottom: '2px' }}>
-                        🔒 Signing Blocked Due to Validation Failure
-                      </div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-                        The candidate transaction failed client-side security checks or RPC simulation. Execution is refused to protect your funds.
-                      </div>
-                    </div>
-                  )}
 
-                  {/* Modal Actions */}
-                  <div className="modal-actions">
+                        <div style={{ marginBottom: '10px' }}>
+                          <input
+                            type="password"
+                            value={phase4Password}
+                            onChange={(e) => setPhase4Password(e.target.value)}
+                            placeholder="Enter wallet keystore password"
+                            disabled={isSubmittingLiveSwap}
+                            style={{
+                              width: '100%',
+                              padding: '8px 10px',
+                              background: 'rgba(0, 0, 0, 0.3)',
+                              border: '1px solid var(--border-subtle)',
+                              borderRadius: '4px',
+                              color: '#fff',
+                              fontSize: '12px',
+                              fontFamily: 'var(--font-mono)',
+                            }}
+                          />
+                        </div>
+
+                        <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', cursor: 'pointer', fontSize: '11px', color: 'var(--text-muted)', userSelect: 'none' }}>
+                          <input
+                            type="checkbox"
+                            checked={clusterSafetyConfirmed}
+                            onChange={(e) => setClusterSafetyConfirmed(e.target.checked)}
+                            disabled={isSubmittingLiveSwap}
+                            style={{ marginTop: '2px' }}
+                          />
+                          <span>
+                            <strong style={{ color: 'var(--accent-amber)' }}>Mainnet Safety Gate:</strong> I confirm intentional execution on Solana Mainnet. I have verified the route, amounts, and fees.
+                          </span>
+                        </label>
+
+                        {isSubmittingLiveSwap && (
+                          <div style={{ marginTop: '12px', background: 'rgba(14, 165, 233, 0.1)', border: '1px solid var(--accent-cyan)', borderRadius: 'var(--radius-sm)', padding: '8px 12px', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                            <div style={{ color: 'var(--accent-cyan)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span className="spinner" style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid var(--accent-cyan)', borderTopColor: 'transparent', borderRadius: '50%' }}></span>
+                              <span>{liveSwapStage || 'Executing trade in Rust...'}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 'var(--radius-sm)', padding: '10px 12px', marginBottom: '8px', fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
+                        <div style={{ color: '#ff6b6b', fontWeight: 700, marginBottom: '2px' }}>
+                          🔒 Signing Blocked Due to Validation Failure
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+                          The candidate transaction failed client-side security checks or RPC simulation. Execution is refused to protect your funds.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Fixed Sticky Action Buttons at Modal Bottom */}
+              <div className="modal-actions" style={{ flexShrink: 0, marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)', background: 'var(--bg-secondary)', zIndex: 10 }}>
+                {liveSubmissionResult ? (
+                  <button
+                    className="modal-btn-confirm"
+                    onClick={() => {
+                      setShowPhase3ReviewModal(false);
+                      setLiveSubmissionResult(null);
+                    }}
+                    style={{ width: '100%', gridColumn: 'span 2', background: 'var(--bg-tertiary)', color: 'var(--text-main)', border: '1px solid var(--border-subtle)', fontWeight: 700 }}
+                  >
+                    CLOSE REVIEW
+                  </button>
+                ) : (
+                  <>
                     <button
                       className="modal-btn-cancel"
                       onClick={() => setShowPhase3ReviewModal(false)}
@@ -4809,9 +4816,9 @@ export default function App() {
                           ? '❌ VALIDATION FAILED'
                           : '🚀 SIGN & SUBMIT TO SOLANA'}
                     </button>
-                  </div>
-                </div>
-              )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
